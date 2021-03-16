@@ -5,6 +5,11 @@ import torchvision
 import matplotlib.pyplot as plt
 import matplotlib.animation as anim
 from torch.utils.tensorboard import SummaryWriter
+if torch.cuda.is_available():
+    device = "cuda:0"
+else:
+    device = "cpu"
+    
 class DBImage:
 
     def __init__(self, height,width,n_labels,hidden,
@@ -29,7 +34,7 @@ class DBImage:
 
         self.model = DBNet(self.n_visible,hidden,self.n_labels,batch_size=batch_size,learning_rate=learning_rate,momentum=momentum,initial_momentum=initial_momentum,weight_decay=weight_decay,tune_rate=tune_rate, tune_decay=tune_decay, tune_momentum=tune_momentum,cdns=cdns,sparsity_penalty=sparsity_penalty,sparsity_target=sparsity_target, path_writer=path_writer)
 
-        self.model.stack[0].tb_funcs.append(self.show_weights)
+        #self.model.stack[0].tb_funcs.append(self.show_weights)
         self.flat_images = []
         self.n_labels = []
 
@@ -95,7 +100,7 @@ class DBImage:
                     text = ax.text(j, i, torch.round(100*confusion_matrix[j][i]).tolist() /100,
                                 ha="center", va="center", color="w")
 
-            self.writer.add_figure("confusion_matrix", fig)
+            self.writer.add_figure("confusion matrix", fig)
 
             fig, axs = plt.subplots(3,3)
             for i in range(3):
@@ -106,23 +111,22 @@ class DBImage:
                     axs[i][j].get_yaxis().set_visible(False)
             self.show_weights()
 
-            self.writer.add_figure("wrong_pred", fig)
+            self.writer.add_figure("wrong predictions", fig)
             for i in range(10):
                 print("Generating: ", str(i))
                 lb = torch.zeros(10)
-                lb[i] = 1
+                lb[i] = 1.
                 self.generate(lb,filename=str(i))
         
         return count / float(test_labels.shape[0])
 
     def generate(self, label,filename="gen"):
-        iters = self.model.generate(label,n=500)
+        lb= label
+        iters = self.model.generate(lb,n=1000)
         video = torch.zeros(1,len(iters),3,self.height,self.width)
         for i in range(len(iters)):
             video[0,i,:,:,:] = iters[i].reshape(self.height,self.width)
-        self.writer.add_video("gen" + str(filename), video)
-        plt.imshow(video[0,-1,0,:,:])
-        plt.show()
+        self.writer.add_video("gen" + str(filename), video,fps=10)
 
         
 
@@ -138,7 +142,8 @@ class DBImage:
     def show_weights(self,n=10,step=0,eps=0):
         images = torch.zeros((n*n,3,self.height,self.width))
         for i in range(n*n):
-            images[i,:] = -1*self.model.stack[0].w[:,i].reshape(self.height,self.width)
+            dummy = self.model.stack[0].w[:,i].reshape(self.height,self.width) - torch.min(self.model.stack[0].w[:,i])
+            images[i,:,:,:] = dummy/torch.max(dummy)
         img_grid = torchvision.utils.make_grid(images,nrow=n)
         
         self.writer.add_image("hidden weights",img_grid,global_step=step)

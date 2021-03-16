@@ -6,3 +6,7 @@ final momentum: 0.9
 
 fine tuning:
 learning rate: 0.01
+
+Experiments:
+change from smpling between layers to not
+change learning rate for layer 0

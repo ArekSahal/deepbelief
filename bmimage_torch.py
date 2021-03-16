@@ -6,6 +6,12 @@ import matplotlib.animation as ani
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
+if torch.cuda.is_available():
+    device = "cuda:0"
+else:
+    device = "cpu"
+    
+
 class BMImage:
 
     def __init__(self, width=100, height=100, hidden=100,
@@ -83,22 +89,24 @@ class BMImage:
         self.model.load_weights(filename)
 
     def reconstruct(self, n=100):
-        if step>=eps:
-            im = self.flat_val_images[0,:]
-            video = torch.zeros(1,n+1,3,self.height,self.width)
-            flat_im = im
-            video[0,0,:,:,:] = self.model.reconstruct(torch.stack([flat_im]).float(),n=1).reshape(self.height,self.width)
-            for i in range(n):
-                video[0,i,:,:,:]  = self.model.reconstruct(torch.stack([video[0,-1,0,:,:].flatten()]),n=1).reshape(self.height,self.width)
-            self.writer.add_video("reconstruction",video)
+        im = self.flat_val_images[0,:].to(device)
+        video = torch.zeros(1,n+1,3,self.height,self.width).to(device)
+        flat_im = im
+        video[0,0,:,:,:] = self.model.reconstruct(torch.stack([flat_im]).float(),n=1).reshape(self.height,self.width)
+        for i in range(n):
+            video[0,i,:,:,:]  = self.model.reconstruct(torch.stack([video[0,-1,0,:,:].flatten()]),n=1).reshape(self.height,self.width)
+        self.writer.add_video("reconstruction",video)
 
 
 
 
-    def show_weights(self,n=5,filename="figures/RBM/",step=0,eps=0):
-        images = torch.zeros((n*n,3,self.height,self.width))
+    def show_weights(self,n=10,filename="figures/RBM/",step=0,eps=0):
+        if n*n > self.model.n_hidden:
+            n=int(torch.sqrt(torch.tensor(self.model.n_hidden)).tolist())
+        images = torch.zeros((n*n,3,self.height,self.width)).to(device)
         for i in range(n*n):
-            images[i,:] = self.model.w[:,i].reshape(self.height,self.width)
+            dummy = self.model.w[:,i].reshape(self.height,self.width) - torch.min(self.model.w[:,i])
+            images[i,:,:,:] = dummy/torch.max(dummy)
         img_grid = torchvision.utils.make_grid(images,nrow=n)
         #print(images)
         

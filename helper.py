@@ -21,5 +21,5 @@ def softmax(support):
       probabilities: shape is (size of mini-batch, number of categories)      
     """
 
-    expsup = torch.exp(support - torch.max(support,dim=-1))
-    return expsup / torch.sum(expsup,dim=-1)
+    expsup = torch.exp(support - torch.max(support,dim=1))
+    return expsup / torch.sum(expsup,dim=1)

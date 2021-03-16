@@ -1,7 +1,6 @@
 import numpy as np 
 import torch 
 from tqdm.auto import trange
-from helper import softmax
 from torch.utils.tensorboard import SummaryWriter
 
 #writer = SummaryWriter('runs/MNIST')
@@ -56,7 +55,7 @@ class BMNet:
         self.delta_w_r_ac = torch.zeros(size=(n_visible,n_hidden)).to(device)
         self.delta_v_bias_g_ac = torch.zeros(n_visible).to(device)
         self.delta_h_bias_r_ac = torch.zeros(n_hidden).to(device)
-        self.q_ac = torch.zeros(self.n_hidden)
+        self.q_ac = torch.zeros(self.n_hidden).to(device)
 
         # Set hyperparameters
         self.batch_size = batch_size
@@ -111,13 +110,9 @@ class BMNet:
         Given a matrix, samples the elements by comparing them to random floats.
         If the element is larger than a random float then it becomes 1 and 0 otherwise
         """
-        #print("X = ", X)
         sampled = torch.zeros(size=X.shape).to(device)
         rnd_mat = torch.from_numpy(np.random.rand(X.shape[0], X.shape[1])).to(device)
-        #print(sampled.shape, rnd_mat.shape, X.shape)
         sampled[rnd_mat <= X] = 1
-        #print(np.sum(sampled == 0))
-        #print("S = ", sampled)
         return sampled
 
     def v_to_h(self, V, sample=True, directed=False):
@@ -135,7 +130,7 @@ class BMNet:
             return self.sample(H)
         return H
 
-    def h_to_v(self,H,sample=True, directed=False):
+    def h_to_v(self,H,sample=False, directed=False):
         """
         Backward pass
         H is assumed to be of shape (batch_size x n_hidden)
@@ -145,35 +140,40 @@ class BMNet:
             output = torch.mm(H,self.w_g.t()) + self.visible_bias_g
         else:
             output = torch.mm(H,self.w.t()) + self.visible_bias
-        V = self.activation(output)
-        if sample:
+        if not self.top:
+            V = self.activation(output)
+        else:
+            V = output
+            lbs = torch.zeros(V.shape[0], self.n_labels)
+            lbs_probs = torch.softmax(V[:,-self.n_labels:],dim=1)
+            lbs[torch.arange(V.shape[0]),torch.argmax(lbs_probs,dim=1)] = 1
+            base = self.activation(V[:,:-self.n_labels])
+            if sample:
+                base = self.sample(base)
+            V[:,-self.n_labels:] = lbs
+            V[:,:-self.n_labels] = base
+        if sample and not self.top:
             return self.sample(V)
         return V
 
 
-    def gibb_sample(self,X,n=1):
+    def gibb_sample(self,X,n=1,sample=False):
         """
         Pretty self explanitory 
         """
         V = X
+        #print("---------INIT---------",V[0,-(self.n_labels + 0):])
         for i in range(n-1):
-            H = self.v_to_h(V)
-            V = self.h_to_v(H,sample=True)
-
-            if self.top:
-                # I'm not sure this should be in here
-                V[:,-self.n_labels:] = torch.softmax(V[:,-self.n_labels:],dim=1)
-
+            H = self.v_to_h(V,sample=True)
+            V = self.h_to_v(H,sample=False)
         H = self.v_to_h(V,sample=True)
         V = self.h_to_v(H,sample=False)
-
-        if self.top:
-            # But here it will stay
-            V[:,-self.n_labels:] = torch.softmax(V[:,-self.n_labels:],dim=1)
+        if sample:
+            return self.sample(V)
 
         return V
 
-    def set_data(self, X,val_X=False):
+    def set_data(self, X, val_X=False):
         """
         Data coming in is assumed to be shuffled.
         X = (n_samples x n_features)
@@ -217,7 +217,6 @@ class BMNet:
         # Start the tensorboard metrics
         self.write_to_tb(0,epochs)
         for ep in trange(epochs,desc="Training Layer"):
-
         #for ep in range(epochs):
             if ep >= 5:
                 # Increase momentum after 5 epochs because Hinton et al. said so
@@ -238,7 +237,7 @@ class BMNet:
                 h_0 = self.v_to_h(v_0, sample=True)
 
                 # Gibb sampling
-                v_1 = self.gibb_sample(v_0, n=self.cdn)
+                v_1 = self.gibb_sample(v_0, n=self.cdn,sample=False)
 
                 # Backwards pass
                 h_1 = self.v_to_h(v_1,sample=True)
@@ -375,8 +374,10 @@ class BMNet:
         self.writer.add_histogram("Hidden bias", self.hidden_bias.flatten(), global_step=ep)
         self.writer.add_scalars("Free energy", {"Training": self.energy(self.train_subset), "Validation": self.energy(self.validation_data)}, global_step=ep)
         self.writer.add_scalars("Reconstruction Loss", {"Training": self.recon_loss(self.train_subset), "Validation": self.recon_loss(self.validation_data)}, global_step=ep)
+        """
         for f in self.tb_funcs:
             f(step=ep,eps=eps)
+        """
 
 
                 

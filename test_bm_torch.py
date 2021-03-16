@@ -27,29 +27,33 @@ print("Done loading MNIST")
 #img_grid = torchvision.utils.make_grid(train_X[:10,:,:])
 #print(img_grid)
 
-train_X_index = torch.tensor(np.random.choice(60000,60000))
-test_X_index = torch.tensor(np.random.choice(10000,100))
+#train_X_index = torch.tensor(np.random.choice(60000,60000))
+#test_X_index = torch.tensor(np.random.choice(10000,100))
 
-train_X = train_X[train_X_index,:,:]
+#rain_X = train_X[train_X_index,:,:]
 #train_X = train_X[train_labels[:,2] == 1,:,:]
-test_X = test_X[test_X_index,:,:]
+#test_X = test_X[test_X_index,:,:]
 
-
+"""
+target = 5
+train_X = train_X[torch.argmax(train_labels,dim=1) == target,:]
+train_labels = train_labels[torch.argmax(train_labels,dim=1) == target,:]
+"""
 
 model = BMImage(28,28,
     hidden=500,
-    batch_size=50,
-    learning_rate=0.05,
-    momentum=0.7,
+    batch_size=20,
+    learning_rate=0.005,
+    momentum=0.9,
     weight_decay=2*10**-4,
     sparsity_penalty=0.0,
     sparsity_target=0.01,
     cdn=1,
     initial_momentum=0.5,
-    path_writer=path+'runs/MNIST/RBM_')
+    path_writer=path+'runs/MNIST/RBM/All_1')
 
-model.set_images(train_X,split=0.9)
-model.train(200,save=True,filename="models/rbm_")
+model.set_images(train_X,split=0.95)
+model.train(20,save=True,filename="models/rbm_")
 #model.load_weights("models/db_0")
 #model.load_weights("models/rbm_")
 #model.load_weights("models/db_")

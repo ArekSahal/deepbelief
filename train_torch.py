@@ -50,8 +50,8 @@ with open(path+'data/test_labels.npy', 'rb') as f:
 
 print("Done loading MNIST")
 
-n_test = 10000
-n_train = 60000
+n_test = 1000
+n_train = 10000
 test_X = test_X[:n_test,:,:].float()
 train_X = train_X[:n_train,:,:].float()
 test_labels = test_labels[:n_test].float()
@@ -60,20 +60,22 @@ train_labels = train_labels[:n_train].float()
 model = DBImage(28,28,10,[500,500,2000],
 batch_size=20,
 learning_rate=0.01,
-momentum=0.1,
-initial_momentum=0.1,
+momentum=0.9,
+initial_momentum=0.5,
 weight_decay=2*10**-4,
 tune_rate=0.001,
-path_writer="runs/MNIST/" + str(datetime.now()) + "_DBN",
+tune_decay=0.0001,
+tune_momentum=0.5,
+path_writer="runs/Trash/6",
 sparsity_target=0.01,
-sparsity_penalty=0.00001)
+sparsity_penalty=0.0)
 
 model.set_images(train_X, train_labels,split=0.9)
 
 #model.load_weights(path+"models/db_")
 
 #model.validate(test_X,test_labels,full=True,filename=path+"figures/DBN/")
-model.train(20,save=True, filename=path + "models/db_")
-model.validate(test_X,test_labels,filename=path+"figures/", full=True)
-#model.tune(5)
-#model.validate(test_X,test_labels,full=True,filename=path+"figures/DBN/")
+model.train(1,save=True, filename=path + "models/db_")
+#model.validate(test_X,test_labels,filename=path+"figures/", full=True)
+#model.tune(20,save=False)
+model.validate(test_X,test_labels,full=True,filename=path+"figures/DBN/")
