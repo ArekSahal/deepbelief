@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from bm_torch import BMNet
+from rbm import BMNet
 from helper import sample
 from tqdm.auto import trange
 import matplotlib.pyplot as plt
