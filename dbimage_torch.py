@@ -47,78 +47,86 @@ class DBImage:
 
     def train(self,epochs,save=True, filename="models/db",test=False, full_loss=False):
         self.model.train(epochs,save, filename=filename,test=test,full_loss=full_loss)
-
-    def validate(self, test_data, test_labels, full=True, filename="figures/DBN/", no_print=False):
-        print("Validating model")
+    def predict(self,X):
         data = []
-        for i in range(test_data.shape[0]):
-            data.append(test_data[i,:,:].flatten())
+        for i in range(X.shape[0]):
+            data.append(X[i,:,:].flatten())
         data = torch.stack(data)/255.0
-        preds_dirty = self.model.predict(data)
-        preds = torch.zeros(preds_dirty.shape)
-        for i in range(preds_dirty.shape[0]):
-            preds[i,torch.argmax(preds_dirty[i,:])] = 1
+        return self.model.predict(data)
+
+
+
+    def validate(self, test_data=False, test_labels=False, full=True, filename="figures/DBN/", no_print=False, generate=True):
+        print("Validating model")
         count = 0
-        for i in range(test_labels.shape[0]):
-            if torch.all(test_labels[i,:] == preds[i,:]):
-                count += 1
-        if not no_print:
-            print("Test accuracy: ", count / test_labels.shape[0])
-        if full:
-            mess_img = []
-            mess_pred = []
-            mess_true =[]
+        if torch.is_tensor(test_data):
+            data = []
+            for i in range(test_data.shape[0]):
+                data.append(test_data[i,:,:].flatten())
+            data = torch.stack(data)/255.0
+            count, preds = self.model.validate(data,test_labels)
 
-            confusion_list = [[0,0,0,0,0,0,0,0,0,0] for i in range(10)]
+            if not no_print:
+                print("Test accuracy: ", count)
+            if full:
+                mess_img = []
+                mess_pred = []
+                mess_true =[]
 
-            for i in range(test_labels.shape[0]):
-                pred = torch.argmax(preds[i])
-                l = torch.argmax(test_labels[i])
-                confusion_list[l][pred] = confusion_list[l][pred] + 1
-                if l != pred:
-                    mess_img.append(test_data[i:i+1,:])
-                    mess_pred.append(pred)
-                    mess_true.append(l)
+                confusion_list = [[0,0,0,0,0,0,0,0,0,0] for i in range(10)]
 
-            print("Confusion Matrix")
-            confusion_matrix = torch.tensor(confusion_list)
-            confusion_matrix = confusion_matrix/torch.sum(confusion_matrix,dim=1)
-            fig, ax = plt.subplots()
-            ax.set_xticks(torch.arange(10).tolist())
-            ax.set_yticks(torch.arange(10).tolist())
-            ax.set_xticklabels(torch.arange(10).tolist())
-            ax.set_yticklabels(torch.arange(10).tolist())
+                for i in range(test_labels.shape[0]):
+                    pred = torch.argmax(preds[i]).to("cpu")
+                    l = torch.argmax(test_labels[i])
+                    confusion_list[l][pred] = confusion_list[l][pred] + 1
+                    if l != pred:
+                        mess_img.append(test_data[i:i+1,:])
+                        mess_pred.append(pred)
+                        mess_true.append(l)
 
-            ax.set_xlabel("Label")
-            ax.set_ylabel("Prediction")
-            ax.set_title("Confusion matrix")
+                print("Confusion Matrix")
+                confusion_matrix = torch.tensor(confusion_list)
+                confusion_matrix = confusion_matrix/torch.sum(confusion_matrix,dim=1)
+                fig, ax = plt.subplots()
+                ax.set_xticks(torch.arange(10).tolist())
+                ax.set_yticks(torch.arange(10).tolist())
+                ax.set_xticklabels(torch.arange(10).tolist())
+                ax.set_yticklabels(torch.arange(10).tolist())
 
-            ax.imshow(confusion_matrix.t(), cmap="viridis")
+                ax.set_xlabel("Label")
+                ax.set_ylabel("Prediction")
+                ax.set_title("Confusion matrix")
 
-            for i in range(10):
-                for j in range(10):
-                    text = ax.text(j, i, torch.round(100*confusion_matrix[j][i]).tolist() /100,
-                                ha="center", va="center", color="w")
+                ax.imshow(confusion_matrix.t(), cmap="viridis")
 
-            self.writer.add_figure("confusion matrix", fig)
+                for i in range(10):
+                    for j in range(10):
+                        text = ax.text(j, i, torch.round(100*confusion_matrix[j][i]).tolist() /100,
+                                    ha="center", va="center", color="w")
 
-            fig, axs = plt.subplots(3,3)
-            for i in range(3):
-                for j in range(3):
-                    axs[i][j].imshow(mess_img[i*3 + j].reshape(self.height,self.width), cmap="Greys_r")
-                    axs[i][j].text(2,3,mess_pred[i*3 + j].tolist(), color="w")
-                    axs[i][j].get_xaxis().set_visible(False)
-                    axs[i][j].get_yaxis().set_visible(False)
-            self.show_weights()
+                self.writer.add_figure("confusion matrix", fig)
 
-            self.writer.add_figure("wrong predictions", fig)
+                fig, axs = plt.subplots(3,3)
+                for i in range(3):
+                    for j in range(3):
+                        axs[i][j].imshow(mess_img[i*3 + j].reshape(self.height,self.width), cmap="Greys_r")
+                        axs[i][j].text(2,3,mess_pred[i*3 + j].tolist(), color="w")
+                        axs[i][j].get_xaxis().set_visible(False)
+                        axs[i][j].get_yaxis().set_visible(False)
+
+                self.writer.add_figure("wrong predictions", fig)
+                self.show_weights()
+        else:
+            count = self.model.validate()
+        
+        if generate:
             for i in range(10):
                 print("Generating: ", str(i))
                 lb = torch.zeros(10)
                 lb[i] = 1.
                 self.generate(lb,filename=str(i))
         
-        return count / float(test_labels.shape[0])
+        return count
 
     def generate(self, label,filename="gen"):
         lb= label
@@ -126,15 +134,25 @@ class DBImage:
         video = torch.zeros(1,len(iters),3,self.height,self.width)
         for i in range(len(iters)):
             video[0,i,:,:,:] = iters[i].reshape(self.height,self.width)
-        self.writer.add_video("gen" + str(filename), video,fps=10)
-
-        
+        self.writer.add_video("gen" + str(filename), video,fps=12)
+    
+    def daydream(self,X, label,filename="X"):
+        lb= label
+        data = torch.stack([X.flatten()])
+        iters = self.model.daydream(data,lb,n=1000)
+        video = torch.zeros(1,len(iters),3,self.height,self.width)
+        for i in range(len(iters)):
+            video[0,i,:,:,:] = iters[i].reshape(self.height,self.width)
+        torchvision.io.write_video("dream.mp4", 255*video[0,:,:,:,:].permute(0,2,3,1), fps=12)
+        self.writer.add_video("dream" + str(filename), video, fps=12)
+    
 
     def load_weights(self,filename="models/db_"):
         self.model.load_weights(filename)
 
-    def tune(self,epochs,save=True,filename="models/db_"):
-        self.model.wakesleep_finetune(epochs,save=save, filename=filename)
+    def tune(self,epochs=[20],save=True,cd=[3],filename="models/db_"):
+        for ep in range(len(epochs)):
+            self.model.wakesleep_finetune(epochs[ep],cd=cd[ep],save=save, filename=filename)
     
     def show_losses(self,filename="figures/DBN/"):
         self.model.show_losses(filename)

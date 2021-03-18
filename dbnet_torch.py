@@ -33,7 +33,8 @@ class DBNet:
         self.n_visible = n_visible
         self.n_hidden = len(hidden)
         self.n_labels = n_labels
-        self.hidden = hidden
+        self.hidden = [self.n_visible] + hidden
+
 
         self.tune_rate = tune_rate
         self.tune_momentum=tune_momentum
@@ -55,25 +56,18 @@ class DBNet:
             }
     
         cdn = 1
-        if cdns:
-            cdn = cdns[0]
-        self.stack = [BMNet(n_visible,hidden[0],batch_size=self.batch_size,learning_rate=learning_rate,momentum=momentum,initial_momentum=initial_momentum,weight_decay=weight_decay, tune_momentum=tune_momentum, tune_decay=tune_decay, cdn=cdn,sparsity_penalty=sparsity_penalty,sparsity_target=sparsity_target,part_of_dbn=True)]
-        for m in range(0,self.n_hidden-1):
-            if m >= self.n_hidden - 2:
-                cdn = 1
-                if cdns:
-                    cdn = cdns[m+1]
-                self.stack.append(BMNet(hidden[m] + n_labels, hidden[m+1], batch_size=self.batch_size,learning_rate=learning_rate,momentum=momentum,initial_momentum=initial_momentum,weight_decay=weight_decay, tune_momentum=tune_momentum, tune_decay=tune_decay, cdn=cdn,top=True,n_labels=self.n_labels,sparsity_penalty=sparsity_penalty,sparsity_target=sparsity_target,part_of_dbn=True))
+        #self.stack = [BMNet(n_visible,hidden[0],batch_size=self.batch_size,learning_rate=learning_rate,momentum=momentum,initial_momentum=initial_momentum,weight_decay=weight_decay, tune_momentum=tune_momentum, tune_decay=tune_decay, cdn=cdn,sparsity_penalty=sparsity_penalty,sparsity_target=sparsity_target,part_of_dbn=True)]
+        self.stack = []
+        for m in range(0,self.n_hidden):
+            if m >= self.n_hidden - 1:
+                self.stack.append(BMNet(self.hidden[m] + n_labels, self.hidden[m+1], batch_size=self.batch_size,learning_rate=learning_rate,momentum=momentum,initial_momentum=initial_momentum,weight_decay=weight_decay, tune_momentum=tune_momentum, tune_decay=tune_decay, cdn=cdn,top=True,n_labels=self.n_labels,sparsity_penalty=sparsity_penalty,sparsity_target=sparsity_target,part_of_dbn=True))
             else:
-                cdn = 1
-                if cdns:
-                    cdn = cdns[m+1]
-                self.stack.append(BMNet(hidden[m], hidden[m+1], batch_size=self.batch_size,learning_rate=learning_rate,momentum=momentum,initial_momentum=initial_momentum,weight_decay=weight_decay, tune_momentum=tune_momentum, tune_decay=tune_decay, cdn=cdn,sparsity_penalty=sparsity_penalty,sparsity_target=sparsity_target,part_of_dbn=True))
+                self.stack.append(BMNet(self.hidden[m], self.hidden[m+1], batch_size=self.batch_size,learning_rate=learning_rate,momentum=momentum,initial_momentum=initial_momentum,weight_decay=weight_decay, tune_momentum=tune_momentum, tune_decay=tune_decay, cdn=cdn,sparsity_penalty=sparsity_penalty,sparsity_target=sparsity_target,part_of_dbn=True))
 
         for m in range(len(self.stack)):
             self.stack[m].writer = SummaryWriter(path_writer+"/layer_" +str(m))
         self.training_data = []
-        self.validation_data = []
+        self.validation_data = False
         self.labels = []
         self.validation_labels = []
         self.val_energies = []
@@ -118,7 +112,10 @@ class DBNet:
 
     def train(self, epochs,save=True, filename="models/db_", test=False, full_loss=True):
         data = self.training_data.clone()
-        val_data = self.validation_data.clone()
+        if torch.is_tensor(self.validation_data):
+            val_data = self.validation_data.clone()
+        else:
+            val_data = False
         for m in trange(len(self.stack),desc="Greedy layer-by-layer training"):
         #for m in range(len(self.stack)):
 
@@ -126,7 +123,8 @@ class DBNet:
                 #print("Training last layer")
                 lbs = self.labels.clone()
                 data = torch.hstack([data, lbs]).float()
-                val_data = torch.hstack([val_data, self.validation_labels]).float()
+                if torch.is_tensor(self.validation_data):
+                    val_data = torch.hstack([val_data, self.validation_labels]).float()
                 self.stack[-1].set_data(data ,val_data)
                 self.stack[-1].train(epochs,save=save,filename=filename + str(self.n_hidden-1),test=test, full_loss=full_loss)
                 if save:
@@ -138,10 +136,10 @@ class DBNet:
                     self.stack[m].save_weights(filename=filename + str(m))
                 # ---------- CHANGE HERE ------------
                 data = self.stack[m].v_to_h(data,sample=False)
-                val_data = self.stack[m].v_to_h(val_data,sample=False)
+                if torch.is_tensor(self.validation_data):
+                    val_data = self.stack[m].v_to_h(val_data,sample=False)
                 # -----------------------------------
         self.params["epochs"] = epochs
-        self.writer.add_hparams(self.params,{"hparam/Accuracy":self.validate()})
 
     def load_weights(self,filename="models/db_"):
         for i in range(len(self.stack)):
@@ -151,36 +149,36 @@ class DBNet:
         data = X
         data = data.to(device)
         for m in range(len(self.stack) - 1):
-            # ----------------- CHANGE HERE -----------------
             data = self.stack[m].v_to_h(data, directed=True, sample=False)
-            # ---------------------------------------------
-        
+
+        out = torch.zeros(X.shape[0],self.n_labels)
+        for i in range(self.n_labels):
+            lb = torch.zeros(X.shape[0],self.n_labels).to(device)
+            lb[:,i] = 1
+            dummy_data = torch.hstack([data, lb])
+            energy = self.stack[-1].energy(dummy_data)
+            out[:,i] = energy
+        out = torch.div(out.t() ,torch.sum(out, dim=1)).t()
+        """
+        # CHANGE HERE ----------------
         lb = torch.ones((X.shape[0],self.n_labels)).to(device) /self.n_labels
         data_pers = data.clone()
         data = torch.hstack([data, lb])
-        #print(data[0,-self.n_labels:])
-        #------- MIN IDE --------
-        """
-        for i in range(20):
-            h = self.stack[-1].v_to_h(data, sample=True)
-            data = self.stack[-1].h_to_v(h)
-            data[:,:-self.n_labels] = data_pers
-        out = data
-        
-        #------- slut på min ide ---------
-        """
+
         out = self.stack[-1].gibb_sample(data, n=20)
-        #print(out[0,-self.n_labels:])
-        #quit()
-        #out = out.to("cpu")
+        # --------------------------- 
         return out[:,-self.n_labels:]
+        """
+        return out.to(device)
 
     def generate(self, label,n=200):
         n_iters = n
         iters = []
         lb = label.to(device)
-        data = torch.rand(self.stack[-1].n_visible - self.n_labels)
+        data = torch.ones(self.stack[0].n_visible)/2
         data = sample(torch.stack([data]))
+        for i in range(len(self.stack)-1):
+            data = self.stack[i].v_to_h(data,sample=True)
         data = torch.hstack([data[0,:], label])
         data = torch.stack([data]).to(device)
         for i in range(n_iters):
@@ -197,27 +195,53 @@ class DBNet:
 
         return iters
 
-    def validate(self,method="validation"):
-        if method=="validation":
+    def daydream(self,X,label, n=200):
+        iters = []
+        data = X.to(device)
+        lb = label.to(device)
+        #data = sample(torch.stack([data]))
+        for i in range(len(self.stack)-1):
+            data = self.stack[i].v_to_h(data,sample=True)
+        data = torch.hstack([data[0,:], lb])
+        data = torch.stack([data]).to(device)
+        for i in range(n):
+            data = self.stack[-1].gibb_sample(data,n=1,sample=True)
+            inter_data = data[:,:-self.n_labels]
+            for i in torch.arange(len(self.stack)-2, -1,-1):
+                if i > 0:
+                    inter_data = self.stack[i].h_to_v(inter_data, sample=True, directed=True)
+                else:
+                    inter_data = self.stack[i].h_to_v(inter_data, sample=False, directed=True)
+            iters.append(inter_data)
+            data[0,-self.n_labels:] = lb
+        return iters
+
+
+    def validate(self,test_data=False,test_labels=False, method="validation", upload=True):
+        count = 0
+        if torch.is_tensor(test_data) and torch.is_tensor(test_labels):
+            data = test_data.to(device)
+            preds = self.predict(data)
+            test_lbs = test_labels.to(device)
+            count = torch.sum(torch.argmax(preds,dim=1) == torch.argmax(test_lbs,dim=1)).tolist() / preds.shape[0]
+            self.writer.add_hparams(self.params,{"hparam/Accuracy":count})
+            return count, preds
+        elif torch.is_tensor(self.validation_data):
             data = self.validation_data.to(device)
+            lbs = self.validation_labels.to(device)
             preds = self.predict(data)
-            count = torch.sum(torch.argmax(preds,dim=1) == torch.argmax(self.validation_labels,dim=1)).tolist() / preds.shape[0]
-            return count
-        elif method=="training":
-            data = self.training_data[:10000,:]
-            data = data
-            preds = self.predict(data)
-            count = 0
-            for i in range(self.labels[:10000,:].shape[0]):
-                if torch.argmax(preds[i,:]) == torch.argmax(self.labels[i,:]):
-                    count += 1
-            return count/self.labels[:10000,:].shape[0]
+            count = torch.sum(torch.argmax(preds,dim=1) == torch.argmax(lbs,dim=1)).tolist() / preds.shape[0]
+        else:
+            print("No validation data to validate model")
+        if upload:
+            self.writer.add_hparams(self.params,{"hparam/Accuracy":count})
+        return count
 
 
-    def wakesleep_finetune(self, epochs,save=True,filename="models/db_"):
+    def wakesleep_finetune(self, epochs,cd=1,save=True,filename="models/db_"):
         #print("Fine-tuning")
         if torch.is_tensor(self.validation_data):
-            self.writer.add_scalar("Tuning accuracy: ",self.validate(),global_step=0)
+            self.writer.add_scalar("Tuning accuracy: ",self.validate(upload=False),global_step=0)
         for ep in trange(epochs,desc="Sleep-Wake fine-tuning"):
         #for ep in range(epochs):
             # Set up minibatch
@@ -243,7 +267,7 @@ class DBNet:
                 #Top sampling
                 X_and_lb = torch.hstack([Vs_wake[-1], current_lbs])
                 h_0 = self.stack[-1].v_to_h(X_and_lb,sample=True)
-                Top_v = self.stack[-1].gibb_sample(X_and_lb,n=3)
+                Top_v = self.stack[-1].gibb_sample(X_and_lb,n=cd)
                 Top_h = self.stack[-1].v_to_h(Top_v, sample=True)
 
                 #Sleep pass
@@ -270,8 +294,7 @@ class DBNet:
                 for m in range(len(self.stack)):
                     self.stack[m].save_weights(filename=filename + str(m))
             if torch.is_tensor(self.validation_data):
-                self.writer.add_scalar("Tuning accuracy: ",self.validate(),global_step=ep+1)
-        self.writer.add_hparams(self.params,{"hparam/Tune_Accuracy":self.validate()})
+                self.writer.add_scalar("Tuning accuracy: ",self.validate(upload=False),global_step=ep+1)
         if save:
             for m in range(len(self.stack)):
                 self.stack[m].save_weights(filename=filename + str(m))

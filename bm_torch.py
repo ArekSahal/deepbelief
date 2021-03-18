@@ -3,8 +3,6 @@ import torch
 from tqdm.auto import trange
 from torch.utils.tensorboard import SummaryWriter
 
-#writer = SummaryWriter('runs/MNIST')
-
 if torch.cuda.is_available():
     device = "cuda:0"
     #device = "cpu"
@@ -16,11 +14,11 @@ else:
 class BMNet:
 
     def __init__(self,n_visible, n_hidden,
-    batch_size=20,
-    learning_rate=0.05,
+    batch_size=10,
+    learning_rate=0.01,
     momentum=0.5, 
     initial_momentum=0.5, # Initial momentum 
-    weight_decay=10**-4,
+    weight_decay=0,
     sparsity_target=0.1,
     sparsity_penalty=0.05,
     cdn=1, # Amount of gibbsamples in our contrastive divergance
@@ -162,7 +160,6 @@ class BMNet:
         Pretty self explanitory 
         """
         V = X
-        #print("---------INIT---------",V[0,-(self.n_labels + 0):])
         for i in range(n-1):
             H = self.v_to_h(V,sample=True)
             V = self.h_to_v(H,sample=False)
@@ -240,7 +237,7 @@ class BMNet:
                 v_1 = self.gibb_sample(v_0, n=self.cdn,sample=False)
 
                 # Backwards pass
-                h_1 = self.v_to_h(v_1,sample=True)
+                h_1 = self.v_to_h(v_1,sample=False)
 
                 # Calculate deltas 
                 delta_w, delta_v_bias, delta_h_bias = self.calc_deltas(v_0,h_0, v_1, h_1)
@@ -364,20 +361,23 @@ class BMNet:
             w = self.w
         
         X = torch.mm(V,w) + h_b
-        F = - torch.mv(V,v_b) - torch.sum(torch.log(1 + torch.exp(X)),dim=-1)
-        return torch.mean(F)
+        #print(torch.mv(V,v_b).shape, torch.log(1 + torch.exp(X)).shape)
+        F = - torch.mv(V,v_b) - torch.sum(torch.log(1 + torch.exp(X)), dim=1)
+        return F
 
     def write_to_tb(self,ep,eps):
         self.writer.add_histogram("Weights", self.w.flatten(), global_step=ep)
         self.writer.add_histogram("Delta weights", torch.abs(self.delta_w_ac.flatten()), global_step=ep)
         self.writer.add_histogram("Visible bias", self.visible_bias.flatten(), global_step=ep)
         self.writer.add_histogram("Hidden bias", self.hidden_bias.flatten(), global_step=ep)
-        self.writer.add_scalars("Free energy", {"Training": self.energy(self.train_subset), "Validation": self.energy(self.validation_data)}, global_step=ep)
-        self.writer.add_scalars("Reconstruction Loss", {"Training": self.recon_loss(self.train_subset), "Validation": self.recon_loss(self.validation_data)}, global_step=ep)
-        """
+        if torch.is_tensor(self.validation_data):
+            self.writer.add_scalars("Free energy", {"Training": torch.mean(self.energy(self.train_subset)), "Validation": torch.mean(self.energy(self.validation_data))}, global_step=ep)
+            self.writer.add_scalars("Reconstruction Loss", {"Training": self.recon_loss(self.train_subset), "Validation": self.recon_loss(self.validation_data)}, global_step=ep)
+        else:
+            self.writer.add_scalars("Free energy", {"Training": torch.mean(self.energy(self.train_subset))}, global_step=ep)
+            self.writer.add_scalars("Reconstruction Loss", {"Training": self.recon_loss(self.train_subset)}, global_step=ep)
         for f in self.tb_funcs:
             f(step=ep,eps=eps)
-        """
 
 
                 
