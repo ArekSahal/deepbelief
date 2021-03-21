@@ -1,4 +1,3 @@
-import numpy as np 
 import torch 
 from tqdm.auto import trange
 from torch.utils.tensorboard import SummaryWriter
@@ -26,10 +25,12 @@ class BMNet:
     tune_decay=0.007, 
     top=False, # If the rbm is the top rbm in our DBN
     n_labels=0, # DBN
-    tb=True, # Record data in tensorboard
+    tb=False, # Record data in tensorboard
     tb_funcs=[], # Functions from parent to run each epoch need to take parameter "step"
     writer=False, # Tensorboard writer
-    part_of_dbn=False
+    part_of_dbn=False,
+    hot_encoding=True,
+    units = ["binary", "binary"] # visible / hidden activation
     ):
 
         # Set number of nodes in the two layers
@@ -66,13 +67,13 @@ class BMNet:
         self.cdn = cdn
         self.sparsity_target = sparsity_target
         self.sparsity_penalty = sparsity_penalty
+        self.hot_encoding = hot_encoding
 
         self.current_momentum = initial_momentum
-        self.part_of_dbn = part_of_dbn
 
         # Save parameters to tensorboard
-        if tb:
-            self.params = {'lr': self.learning_rate,
+        self.tb = tb
+        self.params = {'lr': self.learning_rate,
             "bs": self.batch_size, 
             'wd': self.weight_decay,
             "m": self.momentum,
@@ -80,8 +81,8 @@ class BMNet:
             "s": self.sparsity_target,
             "sp":self.sparsity_penalty
             }
-            self.writer = writer
-            self.tb_funcs = tb_funcs
+        self.writer = writer
+        self.tb_funcs = tb_funcs
 
 
         self.training_data = None
@@ -92,26 +93,41 @@ class BMNet:
         self.training_energies = []
         self.validation_energies = []
 
+        self.part_of_dbn = part_of_dbn
+        # Used for top leve of DBN
         self.top=top
         self.n_labels = n_labels
 
+        # Activation types for visible and hidden
+        self.units = units
+
         
-    def activation(self,x,T=1.0):
+    def activation(self,x,unit="binary",T=1.0):
         """ Activation function:
             Sigmoid
             Ignore the T... for now..
         """
-        return 1.0 / (1 + torch.exp(-x/T))
+        if unit == "binary":
+            return 1.0 / (1 + torch.exp(-x/T))
+        elif unit == "gaussian":
+            return x
+        elif unit == "nrelu":
+            out = x + torch.normal(torch.zeros(size=x.shape), (1 + torch.exp(x)))
+            out[out < 0] = 0
+            return out
 
-    def sample(self,X):
+    def sample(self,X, unit="binary"):
         """
         Given a matrix, samples the elements by comparing them to random floats.
         If the element is larger than a random float then it becomes 1 and 0 otherwise
         """
-        sampled = torch.zeros(size=X.shape).to(device)
-        rnd_mat = torch.from_numpy(np.random.rand(X.shape[0], X.shape[1])).to(device)
-        sampled[rnd_mat <= X] = 1
-        return sampled
+        if unit == "nrelu" or unit=="gaussian":
+            return X
+        elif unit == "binary":
+            sampled = torch.zeros(size=X.shape).to(device)
+            rnd_mat = torch.rand(X.shape[0], X.shape[1]).to(device)
+            sampled[rnd_mat <= X] = 1
+            return sampled
 
     def v_to_h(self, V, sample=True, directed=False):
         """
@@ -123,9 +139,9 @@ class BMNet:
             output = torch.mm(V,self.w_r) + self.hidden_bias_r
         else:
             output = torch.mm(V,self.w) + self.hidden_bias
-        H = self.activation(output)
+        H = self.activation(output, self.units[1])
         if sample:
-            return self.sample(H)
+            return self.sample(H, self.units[1])
         return H
 
     def h_to_v(self,H,sample=False, directed=False):
@@ -139,19 +155,20 @@ class BMNet:
         else:
             output = torch.mm(H,self.w.t()) + self.visible_bias
         if not self.top:
-            V = self.activation(output)
+            V = self.activation(output,self.units[0])
         else:
             V = output
-            lbs = torch.zeros(V.shape[0], self.n_labels)
             lbs_probs = torch.softmax(V[:,-self.n_labels:],dim=1)
-            lbs[torch.arange(V.shape[0]),torch.argmax(lbs_probs,dim=1)] = 1
-            base = self.activation(V[:,:-self.n_labels])
+            if self.hot_encoding:
+                lbs = torch.zeros(V.shape[0], self.n_labels)
+                lbs[torch.arange(V.shape[0]),torch.argmax(lbs_probs,dim=1)] = 1
+            base = self.activation(V[:,:-self.n_labels], self.units[0])
             if sample:
-                base = self.sample(base)
+                base = self.sample(base, self.units[0])
             V[:,-self.n_labels:] = lbs
             V[:,:-self.n_labels] = base
         if sample and not self.top:
-            return self.sample(V)
+            return self.sample(V, self.units[0])
         return V
 
 
@@ -166,7 +183,7 @@ class BMNet:
         H = self.v_to_h(V,sample=True)
         V = self.h_to_v(H,sample=False)
         if sample:
-            return self.sample(V)
+            return self.sample(V, self.units[0])
 
         return V
 
@@ -212,17 +229,17 @@ class BMNet:
         """
 
         # Start the tensorboard metrics
-        self.write_to_tb(0,epochs)
+        if self.tb:
+            self.write_to_tb(0,epochs)
         for ep in trange(epochs,desc="Training Layer"):
         #for ep in range(epochs):
+            #print(self.w)
             if ep >= 5:
                 # Increase momentum after 5 epochs because Hinton et al. said so
                 self.current_momentum = self.momentum
 
             # Shuffle training data
-            rnd_index = np.arange(self.training_data.shape[0])
-            np.random.shuffle(rnd_index)
-            rnd_index = torch.from_numpy(rnd_index)
+            rnd_index = torch.randperm(self.training_data.shape[0])
             data = self.training_data[rnd_index,:]
 
             for batch in trange(len(self.batch_indx), desc="Mini-batch",leave=False):
@@ -238,6 +255,7 @@ class BMNet:
 
                 # Backwards pass
                 h_1 = self.v_to_h(v_1,sample=False)
+                #print(v_1)
 
                 # Calculate deltas 
                 delta_w, delta_v_bias, delta_h_bias = self.calc_deltas(v_0,h_0, v_1, h_1)
@@ -254,15 +272,16 @@ class BMNet:
                 self.save_weights(filename)
 
             # Tensorboard stuff
-            self.write_to_tb(ep+1,epochs)
+            if self.tb:
+                self.write_to_tb(ep+1,epochs)
 
         # Prepare for directed DBN
         self.untwine_weights()
-        if not self.part_of_dbn:
+        if not self.part_of_dbn and self.tb:
             self.writer.add_hparams(self.params,{"hparam/Val_recon": self.recon_loss(self.validation_data)})
         return 0
 
-    def save_weights(self, filename="model"):
+    def save_weights(self, filename="models/rbm"):
         with open(filename + '_w.pt', 'wb') as f:
             torch.save(self.w,f)
         with open(filename + '_w_g.pt', 'wb') as f:
@@ -279,7 +298,7 @@ class BMNet:
             torch.save( self.hidden_bias,f)
 
 
-    def load_weights(self,filename="model"):
+    def load_weights(self,filename="models/rbm"):
         with open(filename + '_w.pt', 'rb') as f:
             self.w = torch.load(f,map_location=torch.device(device))
         try:
@@ -360,10 +379,20 @@ class BMNet:
             h_b = self.hidden_bias
             w = self.w
         
-        X = torch.mm(V,w) + h_b
-        #print(torch.mv(V,v_b).shape, torch.log(1 + torch.exp(X)).shape)
-        F = - torch.mv(V,v_b) - torch.sum(torch.log(1 + torch.exp(X)), dim=1)
-        return F
+        H = torch.mm(V,w) + h_b
+        
+        if self.units == ["binary", "binary"]:
+            #print(torch.mv(V,v_b).shape, torch.log(1 + torch.exp(X)).shape)
+            F = - torch.mv(V,v_b) - torch.sum(torch.log(1 + torch.exp(H)), dim=1)
+            return F
+        elif self.units == ["gaussian", "binary"]:
+            #print("V: ",V.shape, " H: ", H.shape, " w: ", w.shape, " v_b: ", v_b.shape, " h_b: ", h_b.shape)
+            a = 0.5*(torch.norm(V - v_b.t(), dim=1)**2)
+            b = torch.mv(H,h_b)
+            c = torch.sum(V.t() * torch.mm(w,H.t()),dim=0)
+
+            #print("a: ", a.shape, " b: ", b.shape, " c: ", c.shape)
+            return a - b - c
 
     def write_to_tb(self,ep,eps):
         self.writer.add_histogram("Weights", self.w.flatten(), global_step=ep)
